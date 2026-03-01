@@ -34,6 +34,23 @@ You can also provide values with environment variables:
 USAGE
 }
 
+sql_escape_literal() {
+    local value="$1"
+    value=${value//\\/\\\\}
+    value=${value//\'/\'\'}
+    printf "%s" "$value"
+}
+
+sql_escape_identifier() {
+    local value="$1"
+    value=${value//\`/\`\`}
+    printf "%s" "$value"
+}
+
+shell_escape_single_quotes() {
+    printf "%s" "$1" | sed "s/'/'\"'\"'/g"
+}
+
 run_on_new_server() {
     local cmd="$1"
     if [ "$NEW_SERVER" = "localhost" ] || [ "$NEW_SERVER" = "127.0.0.1" ]; then
@@ -60,16 +77,22 @@ postcheck() {
     echo "Running postchecks..."
     local remote_count
     local local_count
-    remote_count=$(ssh "$OLD_SERVER" "mysql -N -u '$WIKI_USER' -p'$WIKI_DB_PASS' -e \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$WIKI_DB';\"")
+    local escaped_wiki_user
+    local escaped_wiki_db
+    local escaped_wiki_db_pass
+    escaped_wiki_user="$(shell_escape_single_quotes "$WIKI_USER")"
+    escaped_wiki_db="$(shell_escape_single_quotes "$WIKI_DB")"
+    escaped_wiki_db_pass="$(shell_escape_single_quotes "$WIKI_DB_PASS")"
+    remote_count=$(ssh "$OLD_SERVER" "MYSQL_PWD='$escaped_wiki_db_pass' mysql -N -u '$escaped_wiki_user' -e \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$escaped_wiki_db';\"")
 
     if [ "$NEW_SERVER" = "localhost" ] || [ "$NEW_SERVER" = "127.0.0.1" ]; then
-        local_count=$(mysql -N -u "$WIKI_USER" -p"$WIKI_DB_PASS" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$WIKI_DB';")
+        local_count=$(MYSQL_PWD="$WIKI_DB_PASS" mysql -N -u "$WIKI_USER" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$WIKI_DB';")
         test -f "$WIKI_PATH/LocalSettings.php"
         test -d "$WIKI_PATH/images"
         test -d "$WIKI_PATH/extensions"
         test -d "$WIKI_PATH/skins"
     else
-        local_count=$(ssh "$NEW_SERVER" "mysql -N -u '$WIKI_USER' -p'$WIKI_DB_PASS' -e \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$WIKI_DB';\"")
+        local_count=$(ssh "$NEW_SERVER" "MYSQL_PWD='$escaped_wiki_db_pass' mysql -N -u '$escaped_wiki_user' -e \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$escaped_wiki_db';\"")
         ssh "$NEW_SERVER" "test -f '$WIKI_PATH/LocalSettings.php' && test -d '$WIKI_PATH/images' && test -d '$WIKI_PATH/extensions' && test -d '$WIKI_PATH/skins'"
     fi
 
@@ -239,7 +262,10 @@ if [ -z "${WIKI_USER:-}" ] || [ -z "${WIKI_DB:-}" ]; then
 fi
 
 echo "Step 1: Backing up database on old server..."
-ssh "$OLD_SERVER" "mysqldump -u '$WIKI_USER' -p'$WIKI_DB_PASS' '$WIKI_DB' > /tmp/wiki_db.sql"
+ESCAPED_WIKI_USER="$(shell_escape_single_quotes "$WIKI_USER")"
+ESCAPED_WIKI_DB="$(shell_escape_single_quotes "$WIKI_DB")"
+ESCAPED_WIKI_DB_PASS="$(shell_escape_single_quotes "$WIKI_DB_PASS")"
+ssh "$OLD_SERVER" "MYSQL_PWD='$ESCAPED_WIKI_DB_PASS' mysqldump -u '$ESCAPED_WIKI_USER' '$ESCAPED_WIKI_DB' > /tmp/wiki_db.sql"
 
 echo "Step 2: Copying database dump to new server..."
 if [ "$NEW_SERVER" = "localhost" ] || [ "$NEW_SERVER" = "127.0.0.1" ]; then
@@ -272,7 +298,10 @@ if [ -z "$MYSQL_ROOT_PASS" ]; then
     echo "No MYSQL_ROOT_PASS provided. Trying MySQL socket/root authentication on new server."
 fi
 
-MYSQL_CREATE_CMD="CREATE DATABASE IF NOT EXISTS $WIKI_DB; CREATE USER IF NOT EXISTS '$WIKI_USER'@'localhost' IDENTIFIED BY '$WIKI_DB_PASS'; GRANT ALL PRIVILEGES ON $WIKI_DB.* TO '$WIKI_USER'@'localhost'; FLUSH PRIVILEGES;"
+WIKI_DB_SQL_ID="$(sql_escape_identifier "$WIKI_DB")"
+WIKI_USER_SQL="$(sql_escape_literal "$WIKI_USER")"
+WIKI_DB_PASS_SQL="$(sql_escape_literal "$WIKI_DB_PASS")"
+MYSQL_CREATE_CMD="CREATE DATABASE IF NOT EXISTS \`$WIKI_DB_SQL_ID\`; CREATE USER IF NOT EXISTS '$WIKI_USER_SQL'@'localhost' IDENTIFIED BY '$WIKI_DB_PASS_SQL'; GRANT ALL PRIVILEGES ON \`$WIKI_DB_SQL_ID\`.* TO '$WIKI_USER_SQL'@'localhost'; FLUSH PRIVILEGES;"
 
 if [ "$NEW_SERVER" = "localhost" ] || [ "$NEW_SERVER" = "127.0.0.1" ]; then
     if [ -n "$MYSQL_ROOT_PASS" ]; then
@@ -290,9 +319,9 @@ fi
 
 echo "Step 6: Importing database..."
 if [ "$NEW_SERVER" = "localhost" ] || [ "$NEW_SERVER" = "127.0.0.1" ]; then
-    mysql -u "$WIKI_USER" -p"$WIKI_DB_PASS" "$WIKI_DB" < /tmp/wiki_db.sql
+    MYSQL_PWD="$WIKI_DB_PASS" mysql -u "$WIKI_USER" "$WIKI_DB" < /tmp/wiki_db.sql
 else
-    ssh "$NEW_SERVER" "mysql -u '$WIKI_USER' -p'$WIKI_DB_PASS' '$WIKI_DB' < /tmp/wiki_db.sql"
+    ssh "$NEW_SERVER" "MYSQL_PWD='$ESCAPED_WIKI_DB_PASS' mysql -u '$ESCAPED_WIKI_USER' '$ESCAPED_WIKI_DB' < /tmp/wiki_db.sql"
 fi
 
 echo "Step 7: Setting permissions on new server..."

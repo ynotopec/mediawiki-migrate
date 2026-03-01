@@ -7,6 +7,7 @@ The migration script now includes:
 - Strict argument value validation for all flags that expect values.
 - Safer database setting extraction from `LocalSettings.php` supporting both single and double quoted values.
 - Automatic cleanup of `/tmp/wiki_db.sql` on exit (local + old server).
+- Safe SQL/shell escaping for DB names, usernames, and passwords to handle special characters reliably.
 
 
 ### 1. Install required packages
