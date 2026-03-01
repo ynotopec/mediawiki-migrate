@@ -39,6 +39,11 @@ Optional flags:
 ./migrate.sh --old old-server --new new-server --wiki-path /var/www/html --old-wiki-path /var/www/html
 ```
 
+Validation flags (recommended):
+```bash
+./migrate.sh --old old-server --new localhost --precheck --postcheck --new-wiki-url http://localhost
+```
+
 You can also set environment variables instead of flags:
 ```bash
 OLD_SERVER=old-server NEW_SERVER=localhost ./migrate.sh
@@ -47,6 +52,11 @@ OLD_SERVER=old-server NEW_SERVER=localhost ./migrate.sh
 For fully unattended runs (no prompts), use non-interactive mode:
 ```bash
 OLD_SERVER=old-server NEW_SERVER=localhost NON_INTERACTIVE=1 ./migrate.sh --non-interactive
+```
+
+You can also enable checks through environment variables:
+```bash
+OLD_SERVER=old-server NEW_SERVER=localhost RUN_PRECHECK=1 RUN_POSTCHECK=1 NEW_WIKI_URL=http://localhost ./migrate.sh
 ```
 
 If `MYSQL_ROOT_PASS` is not set, the script now automatically attempts MySQL root socket authentication.
@@ -64,3 +74,5 @@ If `MYSQL_ROOT_PASS` is not set, the script now automatically attempts MySQL roo
 - Upload test image
 - Check `Special:Version` matches old server
 - Update DNS A record to new server IP
+
+You can partially automate post-migration verification with `--postcheck`, which validates copied file paths and compares old/new table counts.
