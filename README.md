@@ -2,6 +2,13 @@
 
 ## Pre-Migration: New Debian Server Setup
 
+### Reliability improvements in this repo
+The migration script now includes:
+- Strict argument value validation for all flags that expect values.
+- Safer database setting extraction from `LocalSettings.php` supporting both single and double quoted values.
+- Automatic cleanup of `/tmp/wiki_db.sql` on exit (local + old server).
+
+
 ### 1. Install required packages
 ```bash
 apt update
