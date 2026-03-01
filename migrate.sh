@@ -27,25 +27,40 @@ You can also provide values with environment variables:
 USAGE
 }
 
+require_arg() {
+    local option="$1"
+    local value="${2:-}"
+    if [ -z "$value" ] || [[ "$value" == --* ]]; then
+        echo "Missing value for $option"
+        usage
+        exit 1
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --old)
+            require_arg "$1" "${2:-}"
             OLD_SERVER="$2"
             shift 2
             ;;
         --new)
+            require_arg "$1" "${2:-}"
             NEW_SERVER="$2"
             shift 2
             ;;
         --wiki-path)
+            require_arg "$1" "${2:-}"
             WIKI_PATH="$2"
             shift 2
             ;;
         --old-wiki-path)
+            require_arg "$1" "${2:-}"
             OLD_WIKI_PATH="$2"
             shift 2
             ;;
         --mysql-root-pass)
+            require_arg "$1" "${2:-}"
             MYSQL_ROOT_PASS="$2"
             shift 2
             ;;
@@ -83,6 +98,12 @@ if [ -z "$OLD_SERVER" ] || [ -z "$NEW_SERVER" ]; then
     exit 1
 fi
 
+cleanup() {
+    rm -f /tmp/wiki_db.sql
+    ssh "$OLD_SERVER" "rm -f /tmp/wiki_db.sql" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 echo "=== MediaWiki Migration Script ==="
 echo ""
 echo "Old server: $OLD_SERVER"
@@ -98,15 +119,42 @@ if [ "$NEW_SERVER" != "localhost" ] && [ "$NEW_SERVER" != "127.0.0.1" ]; then
 fi
 
 echo "Detecting database credentials from old server..."
-WIKI_USER=$(ssh "$OLD_SERVER" "grep wgDBuser $OLD_WIKI_PATH/LocalSettings.php | cut -d'\"' -f2")
-WIKI_DB=$(ssh "$OLD_SERVER" "grep wgDBname $OLD_WIKI_PATH/LocalSettings.php | cut -d'\"' -f2")
-WIKI_DB_PASS=$(ssh "$OLD_SERVER" "grep wgDBpassword $OLD_WIKI_PATH/LocalSettings.php | cut -d'\"' -f2")
+DB_CONFIG=$(ssh "$OLD_SERVER" "bash -s -- '$OLD_WIKI_PATH'" <<'REMOTE_SCRIPT'
+path="$1/LocalSettings.php"
+extract() {
+    local key="$1"
+    awk -v key="$key" '
+        $0 ~ ("\\$" key "[[:space:]]*=") {
+            if (match($0, /'\''[^'\'']*'\''/)) {
+                print substr($0, RSTART + 1, RLENGTH - 2)
+                exit
+            }
+            if (match($0, /"[^"]*"/)) {
+                print substr($0, RSTART + 1, RLENGTH - 2)
+                exit
+            }
+        }
+    ' "$path"
+}
+printf 'WIKI_USER=%s\n' "$(extract wgDBuser)"
+printf 'WIKI_DB=%s\n' "$(extract wgDBname)"
+printf 'WIKI_DB_PASS=%s\n' "$(extract wgDBpassword)"
+REMOTE_SCRIPT
+)
+
+while IFS='=' read -r key value; do
+    case "$key" in
+        WIKI_USER) WIKI_USER="$value" ;;
+        WIKI_DB) WIKI_DB="$value" ;;
+        WIKI_DB_PASS) WIKI_DB_PASS="$value" ;;
+    esac
+done <<< "$DB_CONFIG"
 
 echo "  Database: $WIKI_DB"
 echo "  User: $WIKI_USER"
 echo ""
 
-if [ -z "$WIKI_USER" ] || [ -z "$WIKI_DB" ]; then
+if [ -z "${WIKI_USER:-}" ] || [ -z "${WIKI_DB:-}" ]; then
     echo "Failed to detect database settings from LocalSettings.php"
     exit 1
 fi
