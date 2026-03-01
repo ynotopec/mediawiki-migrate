@@ -8,6 +8,9 @@ MYSQL_ROOT_PASS="${MYSQL_ROOT_PASS:-}"
 WIKI_PATH="${WIKI_PATH:-/var/www/html}"
 OLD_WIKI_PATH="${OLD_WIKI_PATH:-$WIKI_PATH}"
 NON_INTERACTIVE="${NON_INTERACTIVE:-0}"
+RUN_PRECHECK="${RUN_PRECHECK:-0}"
+RUN_POSTCHECK="${RUN_POSTCHECK:-0}"
+NEW_WIKI_URL="${NEW_WIKI_URL:-}"
 
 usage() {
     cat <<USAGE
@@ -20,11 +23,70 @@ Options:
   --old-wiki-path <path>  Wiki path on old server (default: same as --wiki-path)
   --mysql-root-pass <pw>  MySQL root password on new server (optional)
   --non-interactive       Do not prompt; fail if required inputs are missing
+  --precheck              Run connectivity and dependency checks before migration
+  --postcheck             Run validation checks after migration
+  --new-wiki-url <url>    Optional URL used by --postcheck HTTP health check
   -h, --help              Show this help message
 
 You can also provide values with environment variables:
-  OLD_SERVER, NEW_SERVER, WIKI_PATH, OLD_WIKI_PATH, MYSQL_ROOT_PASS, NON_INTERACTIVE
+  OLD_SERVER, NEW_SERVER, WIKI_PATH, OLD_WIKI_PATH, MYSQL_ROOT_PASS,
+  NON_INTERACTIVE, RUN_PRECHECK, RUN_POSTCHECK, NEW_WIKI_URL
 USAGE
+}
+
+run_on_new_server() {
+    local cmd="$1"
+    if [ "$NEW_SERVER" = "localhost" ] || [ "$NEW_SERVER" = "127.0.0.1" ]; then
+        bash -lc "$cmd"
+    else
+        ssh "$NEW_SERVER" "$cmd"
+    fi
+}
+
+precheck() {
+    echo "Running prechecks..."
+    ssh "$OLD_SERVER" "command -v mysql >/dev/null && command -v mysqldump >/dev/null && command -v rsync >/dev/null"
+    run_on_new_server "command -v mysql >/dev/null && command -v rsync >/dev/null"
+    run_on_new_server "test -d '$WIKI_PATH' && test -w '$WIKI_PATH'"
+    if [ "$NEW_SERVER" = "localhost" ] || [ "$NEW_SERVER" = "127.0.0.1" ]; then
+        df -h "$WIKI_PATH" >/dev/null
+    else
+        ssh "$NEW_SERVER" "df -h '$WIKI_PATH' >/dev/null"
+    fi
+    echo "Prechecks passed."
+}
+
+postcheck() {
+    echo "Running postchecks..."
+    local remote_count
+    local local_count
+    remote_count=$(ssh "$OLD_SERVER" "mysql -N -u '$WIKI_USER' -p'$WIKI_DB_PASS' -e \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$WIKI_DB';\"")
+
+    if [ "$NEW_SERVER" = "localhost" ] || [ "$NEW_SERVER" = "127.0.0.1" ]; then
+        local_count=$(mysql -N -u "$WIKI_USER" -p"$WIKI_DB_PASS" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$WIKI_DB';")
+        test -f "$WIKI_PATH/LocalSettings.php"
+        test -d "$WIKI_PATH/images"
+        test -d "$WIKI_PATH/extensions"
+        test -d "$WIKI_PATH/skins"
+    else
+        local_count=$(ssh "$NEW_SERVER" "mysql -N -u '$WIKI_USER' -p'$WIKI_DB_PASS' -e \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$WIKI_DB';\"")
+        ssh "$NEW_SERVER" "test -f '$WIKI_PATH/LocalSettings.php' && test -d '$WIKI_PATH/images' && test -d '$WIKI_PATH/extensions' && test -d '$WIKI_PATH/skins'"
+    fi
+
+    echo "  Old server table count: $remote_count"
+    echo "  New server table count: $local_count"
+    if [ "$remote_count" != "$local_count" ]; then
+        echo "Postcheck failed: table counts differ."
+        exit 1
+    fi
+
+    if [ -n "$NEW_WIKI_URL" ]; then
+        command -v curl >/dev/null
+        curl --fail --silent --show-error "$NEW_WIKI_URL" >/dev/null
+        echo "  HTTP check OK: $NEW_WIKI_URL"
+    fi
+
+    echo "Postchecks passed."
 }
 
 require_arg() {
@@ -67,6 +129,19 @@ while [[ $# -gt 0 ]]; do
         --non-interactive)
             NON_INTERACTIVE=1
             shift
+            ;;
+        --precheck)
+            RUN_PRECHECK=1
+            shift
+            ;;
+        --postcheck)
+            RUN_POSTCHECK=1
+            shift
+            ;;
+        --new-wiki-url)
+            require_arg "$1" "${2:-}"
+            NEW_WIKI_URL="$2"
+            shift 2
             ;;
         -h|--help)
             usage
@@ -116,6 +191,10 @@ echo "Checking connectivity..."
 ssh "$OLD_SERVER" "echo 'Connected to old server'" >/dev/null
 if [ "$NEW_SERVER" != "localhost" ] && [ "$NEW_SERVER" != "127.0.0.1" ]; then
     ssh "$NEW_SERVER" "echo 'Connected to new server'" >/dev/null
+fi
+
+if [ "$RUN_PRECHECK" = "1" ]; then
+    precheck
 fi
 
 echo "Detecting database credentials from old server..."
@@ -234,3 +313,7 @@ echo "1. Validate wiki access in browser"
 echo "2. Update DNS/point old server IP to new server"
 echo "3. Run update.php if needed: php maintenance/update.php"
 echo "4. Clear caches: rm -rf $WIKI_PATH/cache/*"
+
+if [ "$RUN_POSTCHECK" = "1" ]; then
+    postcheck
+fi
