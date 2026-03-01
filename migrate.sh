@@ -7,6 +7,7 @@ NEW_SERVER="${NEW_SERVER:-}"
 MYSQL_ROOT_PASS="${MYSQL_ROOT_PASS:-}"
 WIKI_PATH="${WIKI_PATH:-/var/www/html}"
 OLD_WIKI_PATH="${OLD_WIKI_PATH:-$WIKI_PATH}"
+NON_INTERACTIVE="${NON_INTERACTIVE:-0}"
 
 usage() {
     cat <<USAGE
@@ -18,10 +19,11 @@ Options:
   --wiki-path <path>      Wiki path on new server (default: /var/www/html)
   --old-wiki-path <path>  Wiki path on old server (default: same as --wiki-path)
   --mysql-root-pass <pw>  MySQL root password on new server (optional)
+  --non-interactive       Do not prompt; fail if required inputs are missing
   -h, --help              Show this help message
 
 You can also provide values with environment variables:
-  OLD_SERVER, NEW_SERVER, WIKI_PATH, OLD_WIKI_PATH, MYSQL_ROOT_PASS
+  OLD_SERVER, NEW_SERVER, WIKI_PATH, OLD_WIKI_PATH, MYSQL_ROOT_PASS, NON_INTERACTIVE
 USAGE
 }
 
@@ -47,6 +49,10 @@ while [[ $# -gt 0 ]]; do
             MYSQL_ROOT_PASS="$2"
             shift 2
             ;;
+        --non-interactive)
+            NON_INTERACTIVE=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -60,6 +66,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$OLD_SERVER" ]; then
+    if [ "$NON_INTERACTIVE" = "1" ]; then
+        echo "OLD_SERVER is required in --non-interactive mode."
+        usage
+        exit 1
+    fi
     read -rp "Old server (host/IP): " OLD_SERVER
 fi
 if [ -z "$NEW_SERVER" ]; then
@@ -131,8 +142,7 @@ fi
 
 echo "Step 5: Creating database and user on new server..."
 if [ -z "$MYSQL_ROOT_PASS" ]; then
-    read -rsp "MySQL root password on new server (leave blank for socket auth): " MYSQL_ROOT_PASS
-    echo ""
+    echo "No MYSQL_ROOT_PASS provided. Trying MySQL socket/root authentication on new server."
 fi
 
 MYSQL_CREATE_CMD="CREATE DATABASE IF NOT EXISTS $WIKI_DB; CREATE USER IF NOT EXISTS '$WIKI_USER'@'localhost' IDENTIFIED BY '$WIKI_DB_PASS'; GRANT ALL PRIVILEGES ON $WIKI_DB.* TO '$WIKI_USER'@'localhost'; FLUSH PRIVILEGES;"
