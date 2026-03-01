@@ -37,6 +37,13 @@ You can also set environment variables instead of flags:
 OLD_SERVER=old-server NEW_SERVER=localhost ./migrate.sh
 ```
 
+For fully unattended runs (no prompts), use non-interactive mode:
+```bash
+OLD_SERVER=old-server NEW_SERVER=localhost NON_INTERACTIVE=1 ./migrate.sh --non-interactive
+```
+
+If `MYSQL_ROOT_PASS` is not set, the script now automatically attempts MySQL root socket authentication.
+
 ### 5. What the script now automates
 - Detects `wgDBuser`, `wgDBname`, and `wgDBpassword` from old `LocalSettings.php`
 - Dumps DB from old server and transfers it
